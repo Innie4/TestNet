@@ -40,21 +40,26 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Update balance when account changes
+  // Update balance when account changes or when connected
   useEffect(() => {
-    if (account && isBSC) {
-      fetchBalance();
+    if (account && isBSC && isConnected && connectionStep === 'connected') {
+      console.log('Account or network changed, fetching balance...');
+      // Small delay to ensure everything is ready
+      const timer = setTimeout(() => {
+        fetchBalance();
+      }, 500);
+      return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account, isBSC]);
+  }, [account, isBSC, isConnected, connectionStep]);
 
   const checkConnection = async () => {
     try {
       if (typeof window === 'undefined') return;
       const ethereum = getCoinbaseProvider();
       if (ethereum && ethereum.selectedAddress) {
-        const accounts = await ethereum.request({ method: 'eth_accounts' });
-        if (accounts.length > 0) {
+        const accounts = await ethereum.request({ method: 'eth_accounts' }) as string[];
+        if (accounts && accounts.length > 0) {
           setAccount(accounts[0]);
           setIsConnected(true);
           setConnectionStep('connected');
@@ -114,13 +119,13 @@ export default function Home() {
       }
 
       // Perform the Coinbase Handshake (eth_requestAccounts)
-      // Note: This will still trigger browser popup, but we've explained it to the user
+      // This connects to Coinbase Smart Wallet (not browser extension)
       setConnectionStep('connecting');
       const accounts = await ethereum.request({
         method: 'eth_requestAccounts',
-      });
+      }) as string[];
 
-      if (accounts.length === 0) {
+      if (!accounts || accounts.length === 0) {
         throw new Error('No accounts found. Please approve the connection.');
       }
 
@@ -151,19 +156,20 @@ export default function Home() {
         console.log('Already on BSC network');
         setIsBSC(true);
         setConnectionStep('fetching');
-        // Small delay to ensure provider is ready
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Longer delay to ensure provider is fully ready
+        await new Promise(resolve => setTimeout(resolve, 1500));
         await fetchBalance();
         setConnectionStep('connected');
       }
 
       // Listen for account changes
       if (ethereum.on) {
-        ethereum.on('accountsChanged', (accounts: string[]) => {
-          if (accounts.length === 0) {
+        ethereum.on('accountsChanged', (accounts: unknown) => {
+          const accountArray = accounts as string[];
+          if (!accountArray || accountArray.length === 0) {
             disconnectWallet();
           } else {
-            setAccount(accounts[0]);
+            setAccount(accountArray[0]);
             if (isBSC) {
               fetchBalance();
             }
@@ -204,30 +210,132 @@ export default function Home() {
     setConnectionStep('authorization');
   };
 
-  const fetchBalance = async () => {
-    if (!account) return;
+  const fetchBalance = async (retryCount = 0) => {
+    if (!account) {
+      console.log('No account set, skipping balance fetch');
+      return;
+    }
+
+    if (!isBSC) {
+      console.log('Not on BSC network, skipping balance fetch');
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
     try {
+      console.log('=== Starting Balance Fetch ===');
+      console.log('Account:', account);
+      console.log('Network: BSC (56)');
+      console.log('Contract: 0xc98cf0876b23fb1f574be5c59e4217c80b34d327');
+      
       const ethereum = getCoinbaseProvider();
-      const provider = new ethers.providers.Web3Provider(ethereum);
-      const tethData = await getTETHBalance(provider, account);
+      
+      if (!ethereum) {
+        throw new Error('Wallet provider not available');
+      }
 
+      // Ensure provider is ready and test connection
+      console.log('Testing provider connection...');
+      if (ethereum.request) {
+        const testAccounts = await ethereum.request({ method: 'eth_accounts' }) as string[];
+        console.log('Provider accounts:', testAccounts);
+        if (!testAccounts || testAccounts.length === 0) {
+          throw new Error('No accounts available in provider');
+        }
+        if (testAccounts[0].toLowerCase() !== account.toLowerCase()) {
+          console.warn('Account mismatch:', { 
+            expected: account, 
+            got: testAccounts[0] 
+          });
+        }
+      }
+
+      const provider = new ethers.providers.Web3Provider(ethereum as any);
+      
+      // Wait for network to be ready
+      console.log('Waiting for provider to be ready...');
+      await provider.ready;
+      
+      // Verify network
+      const network = await provider.getNetwork();
+      console.log('Provider network:', network);
+      if (network.chainId !== 56) {
+        throw new Error(`Wrong network. Expected BSC (56), got ${network.chainId}`);
+      }
+
+      // Verify account is correct
+      const signer = provider.getSigner();
+      const signerAddress = await signer.getAddress();
+      console.log('Signer address:', signerAddress);
+      if (signerAddress.toLowerCase() !== account.toLowerCase()) {
+        console.warn('Address mismatch, using signer address:', signerAddress);
+        setAccount(signerAddress);
+      }
+
+      // Use signer address for balance check
+      const addressToCheck = signerAddress.toLowerCase();
+      console.log('Fetching balance for address:', addressToCheck);
+      
+      const tethData = await getTETHBalance(provider, addressToCheck);
+      console.log('=== Balance Data Received ===');
+      console.log('Raw balance:', tethData.balance);
+      console.log('Formatted balance:', tethData.balanceFormatted);
+      console.log('Symbol:', tethData.symbol);
+      console.log('Name:', tethData.name);
+      console.log('Decimals:', tethData.decimals);
+
+      // Import and format balance correctly
+      const rawBalance = tethData.balanceFormatted;
       setBalance(tethData.balance);
-      setBalanceFormatted(parseFloat(tethData.balanceFormatted).toLocaleString('en-US', {
+      
+      // Format balance with proper decimal handling
+      const balanceNum = parseFloat(rawBalance);
+      const formatted = balanceNum.toLocaleString('en-US', {
+        minimumFractionDigits: 0,
         maximumFractionDigits: 6,
-      }));
+      });
+      setBalanceFormatted(formatted);
 
       // Calculate USD value
       const priceNum = parseFloat(price);
-      const usd = calculateUSDValue(tethData.balanceFormatted, priceNum);
+      const usd = calculateUSDValue(rawBalance, priceNum);
       setUsdValue(usd);
 
+      console.log('=== Balance Update Complete ===');
+      console.log('Formatted:', formatted);
+      console.log('USD Value:', usd);
+
+      // If balance is 0, log additional info for debugging
+      if (balanceNum === 0) {
+        console.warn('Balance is 0. Verifying contract and address...');
+        console.log('Contract address:', '0xc98cf0876b23fb1f574be5c59e4217c80b34d327');
+        console.log('User address:', addressToCheck);
+        console.log('Network chain ID:', network.chainId);
+      }
+
     } catch (err: any) {
-      console.error('Error fetching balance:', err);
-      setError(err.message || 'Failed to fetch balance');
+      console.error('=== Error Fetching Balance ===');
+      console.error('Error details:', err);
+      console.error('Error code:', err.code);
+      console.error('Error message:', err.message);
+      console.error('Error data:', err.data);
+      
+      const errorMessage = err.message || 'Failed to fetch balance';
+      setError(errorMessage);
+      
+      // Retry logic (max 2 retries)
+      if (retryCount < 2) {
+        console.log(`Retrying balance fetch (attempt ${retryCount + 1}/2)...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return fetchBalance(retryCount + 1);
+      }
+      
+      // Set default values on error after retries
+      setBalance('0');
+      setBalanceFormatted('0');
+      setUsdValue('0.00');
     } finally {
       setLoading(false);
     }
@@ -374,7 +482,7 @@ export default function Home() {
           {isBSC && (
             <button
               className="button secondary"
-              onClick={fetchBalance}
+              onClick={() => fetchBalance()}
               disabled={loading}
             >
               {loading ? (

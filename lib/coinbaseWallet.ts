@@ -67,63 +67,29 @@ export const getWalletConnectionMethod = (): 'extension' | 'mobile' | 'unknown' 
 };
 
 // Get the Ethereum provider from Coinbase Wallet
-// Supports both browser extension and mobile app
+// ALWAYS uses Coinbase Smart Wallet SDK (not browser extension)
+// This ensures connection goes through Coinbase Smart Wallet, not browser popups
 export const getCoinbaseProvider = () => {
   if (typeof window === 'undefined') {
     throw new Error('Window is not defined');
   }
 
-  const ethereum = (window as any).ethereum;
-  const connectionMethod = getWalletConnectionMethod();
-
-  // Priority 1: Coinbase Wallet browser extension (for desktop/laptop)
-  if (ethereum?.isCoinbaseWallet) {
-    console.log('Using Coinbase Wallet browser extension');
-    return ethereum;
-  }
-
-  // Priority 2: Coinbase Wallet in providers array (multiple wallets installed)
-  if (ethereum?.providers && Array.isArray(ethereum.providers)) {
-    const coinbaseProvider = ethereum.providers.find(
-      (provider: any) => provider.isCoinbaseWallet
-    );
-    if (coinbaseProvider) {
-      console.log('Found Coinbase Wallet extension in providers array');
-      return coinbaseProvider;
-    }
-  }
-
-  // Priority 3: Standard ethereum provider (might be Coinbase Wallet without flag)
-  // This handles cases where Coinbase Wallet extension exists but doesn't set the flag
-  if (ethereum && ethereum.request) {
-    // Check if it's likely Coinbase Wallet by checking for specific properties
-    const isLikelyCoinbase = 
-      ethereum.selectedAddress !== undefined ||
-      ethereum.isMetaMask === false; // MetaMask sets this to true
-    
-    if (isLikelyCoinbase || connectionMethod === 'extension') {
-      console.log('Using ethereum provider (likely Coinbase Wallet extension)');
-      return ethereum;
-    }
-  }
-
-  // Priority 4: Initialize Coinbase Wallet SDK for mobile app and web
-  // This will work for:
-  // - Mobile devices (opens Coinbase Wallet app)
-  // - Desktop browsers without extension (shows QR code or deep link)
-  console.log('Initializing Coinbase Wallet SDK for mobile/web connection');
+  // ALWAYS use Coinbase Wallet SDK to target Smart Wallet
+  // This bypasses browser extension and connects directly to Coinbase Smart Wallet
+  console.log('Initializing Coinbase Wallet SDK for Smart Wallet connection');
   const sdk = initializeSDK();
   
   // Create Web3 provider for BSC
-  // The SDK will automatically handle:
+  // The SDK will:
+  // - Use Coinbase Smart Wallet (not browser extension)
   // - Mobile: Deep linking to Coinbase Wallet app
-  // - Desktop: QR code for mobile wallet scanning
-  // - Extension: Will use extension if available
+  // - Desktop: QR code for mobile wallet scanning or Smart Wallet connection
   const provider = sdk.makeWeb3Provider(
     "https://bsc-dataseed.binance.org/",
     56 // BSC chain ID
   );
 
+  console.log('Using Coinbase Smart Wallet SDK provider');
   return provider;
 };
 
