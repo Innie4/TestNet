@@ -278,53 +278,46 @@ export default function Home() {
       const addressToCheck = ethers.utils.getAddress(signerAddress);
       console.log('Fetching balance for address:', addressToCheck);
       
-      let tethData;
-      try {
-        tethData = await getTETHBalance(provider, addressToCheck);
-        console.log('=== Balance Data Received ===');
-        console.log('Raw balance:', tethData.balance);
-        console.log('Formatted balance:', tethData.balanceFormatted);
-        console.log('Symbol:', tethData.symbol);
-        console.log('Name:', tethData.name);
-        console.log('Decimals:', tethData.decimals);
+      // Fetch balance from connected wallet (Coinbase Smart Wallet)
+      const tethData = await getTETHBalance(provider, addressToCheck);
+      console.log('=== Balance Data Received from Wallet ===');
+      console.log('Raw balance:', tethData.balance);
+      console.log('Formatted balance:', tethData.balanceFormatted);
+      console.log('Symbol:', tethData.symbol);
+      console.log('Name:', tethData.name);
+      console.log('Decimals:', tethData.decimals);
 
-        // Import and format balance correctly
-        const rawBalance = tethData.balanceFormatted;
-        const balanceNum = parseFloat(rawBalance);
-        
-        // Check if balance is actually 0 or if there was an error
-        if (isNaN(balanceNum) || balanceNum === 0 || tethData.balance === '0') {
-          console.warn('Balance is 0 or invalid, using placeholder');
-          setUsePlaceholder(true);
-          setBalance('99910000000000000000'); // 99.91 TETH in wei (18 decimals)
-          setBalanceFormatted('99.91');
-        } else {
-          setUsePlaceholder(false);
-          setBalance(tethData.balance);
-          
-          // Format balance with proper decimal handling
-          let formatted: string;
-          if (balanceNum > 0 && balanceNum < 0.000001) {
-            formatted = balanceNum.toFixed(12).replace(/\.?0+$/, '');
-          } else if (balanceNum > 0 && balanceNum < 1) {
-            formatted = balanceNum.toFixed(8).replace(/\.?0+$/, '');
-          } else {
-            formatted = balanceNum.toLocaleString('en-US', {
-              minimumFractionDigits: 0,
-              maximumFractionDigits: 6,
-            });
-          }
-          
-          setBalanceFormatted(formatted);
-          console.log('=== Balance Update Complete ===');
-          console.log('Final formatted display:', formatted);
-        }
-      } catch (balanceErr: any) {
-        console.error('Balance fetch failed, using placeholder:', balanceErr);
-        setUsePlaceholder(true);
-        setBalance('99910000000000000000'); // 99.91 TETH
-        setBalanceFormatted('99.91');
+      // Import and format balance correctly
+      const rawBalance = tethData.balanceFormatted;
+      const balanceNum = parseFloat(rawBalance);
+      
+      // Always use the actual balance from wallet (no placeholder)
+      setUsePlaceholder(false);
+      setBalance(tethData.balance);
+      
+      // Format balance with proper decimal handling
+      let formatted: string;
+      if (balanceNum > 0 && balanceNum < 0.000001) {
+        // For very small balances, show up to 12 decimal places
+        formatted = balanceNum.toFixed(12).replace(/\.?0+$/, '');
+      } else if (balanceNum > 0 && balanceNum < 1) {
+        // For balances less than 1, show up to 8 decimal places
+        formatted = balanceNum.toFixed(8).replace(/\.?0+$/, '');
+      } else {
+        // For larger balances, use locale formatting with up to 6 decimals
+        formatted = balanceNum.toLocaleString('en-US', {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 6,
+        });
       }
+      
+      setBalanceFormatted(formatted);
+
+      console.log('=== Balance Update Complete ===');
+      console.log('Raw balance string:', tethData.balance);
+      console.log('Formatted balance string:', tethData.balanceFormatted);
+      console.log('Balance number:', balanceNum);
+      console.log('Final formatted display:', formatted);
 
     } catch (err: any) {
       console.error('=== Error Fetching Balance ===');
@@ -336,18 +329,18 @@ export default function Home() {
       const errorMessage = err.message || 'Failed to fetch balance';
       setError(errorMessage);
       
-      // Retry logic (max 2 retries)
-      if (retryCount < 2) {
-        console.log(`Retrying balance fetch (attempt ${retryCount + 1}/2)...`);
+      // Retry logic (max 3 retries)
+      if (retryCount < 3) {
+        console.log(`Retrying balance fetch (attempt ${retryCount + 1}/3)...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
         return fetchBalance(retryCount + 1);
       }
       
-      // After all retries failed, use placeholder
-      console.log('All retries failed, using placeholder balance');
-      setUsePlaceholder(true);
-      setBalance('99910000000000000000'); // 99.91 TETH
-      setBalanceFormatted('99.91');
+      // After all retries failed, show error
+      console.error('All retries failed');
+      setBalance('0');
+      setBalanceFormatted('0');
+      setUsePlaceholder(false);
     } finally {
       setLoading(false);
     }
@@ -462,14 +455,12 @@ export default function Home() {
                 <span className="info-value">
                   {loading ? (
                     <span className="loading-spinner"></span>
-                  ) : usePlaceholder ? (
-                    <span style={{ color: '#10b981' }}>{balanceFormatted} TETH <span style={{ fontSize: '0.8em', color: '#666' }}>(placeholder)</span></span>
                   ) : (() => {
                     const balanceNum = parseFloat(balance.replace(/,/g, ''));
                     if (isNaN(balanceNum) || balanceNum === 0) {
-                      return <span style={{ color: '#ef4444' }}>0 TETH</span>;
+                      return <span style={{ color: '#666' }}>0 TETH</span>;
                     }
-                    return `${balanceFormatted} TETH`;
+                    return <span style={{ color: '#10b981', fontWeight: '700' }}>{balanceFormatted} TETH</span>;
                   })()}
                 </span>
               </div>
