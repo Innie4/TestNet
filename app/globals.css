@@ -228,6 +228,83 @@ a {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
 }
 
+.connection-method-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  margin-top: 16px;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.connection-method-badge.extension {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 2px solid #3b82f6;
+}
+
+.connection-method-badge.mobile {
+  background: #fef3c7;
+  color: #92400e;
+  border: 2px solid #f59e0b;
+}
+
+.connection-methods-info {
+  background: #f0f9ff;
+  border: 2px solid #0ea5e9;
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 24px;
+}
+
+.connection-methods-info h4 {
+  color: #0369a1;
+  margin-bottom: 12px;
+  font-size: 1.1rem;
+}
+
+.connection-methods-info ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px 0;
+}
+
+.connection-methods-info li {
+  color: #075985;
+  padding: 8px 0;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.connection-methods-info strong {
+  color: #0369a1;
+}
+
+.status-indicator {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.status-indicator.active {
+  background: #10b981;
+  color: white;
+}
+
+.connection-note {
+  color: #075985;
+  font-size: 0.9rem;
+  font-style: italic;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid #bae6fd;
+}
+
 .authorization-header {
   text-align: center;
   margin-bottom: 32px;
@@ -430,6 +507,25 @@ a {
   border-radius: 8px;
   margin-top: 16px;
   font-size: 0.9rem;
+}
+
+.mobile-connection-hint {
+  background: #fef3c7;
+  border: 2px solid #f59e0b;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 16px;
+  font-size: 0.9rem;
+  color: #92400e;
+}
+
+.mobile-connection-hint p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.mobile-connection-hint strong {
+  color: #78350f;
 }
 
 /* Responsive Design */
