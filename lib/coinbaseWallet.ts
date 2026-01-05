@@ -73,6 +73,12 @@ export const getWalletConnectionMethod = (): 'extension' | 'mobile' | 'unknown' 
 // Store the SDK provider instance
 let sdkProviderInstance: any = null;
 
+// Function to reset provider instance (for cleanup/disconnect)
+export const resetProviderInstance = () => {
+  console.log('Resetting SDK provider instance');
+  sdkProviderInstance = null;
+};
+
 // Get the Ethereum provider from Coinbase Wallet
 // ALWAYS uses Coinbase Smart Wallet SDK (NEVER browser extension)
 // This ensures connection goes through Coinbase Smart Wallet, not browser popups

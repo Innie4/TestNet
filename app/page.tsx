@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ethers } from 'ethers';
-import { getCoinbaseProvider } from '@/lib/coinbaseWallet';
+import { getCoinbaseProvider, resetProviderInstance } from '@/lib/coinbaseWallet';
 import { getTETHBalance, switchToBSC, getCurrentChainId } from '@/lib/tethToken';
 import { fetchTETHPrice } from '@/lib/priceFetcher';
 import { BSC_NETWORK } from '@/lib/constants';
@@ -16,17 +16,41 @@ export default function Home() {
   const [balance, setBalance] = useState<string>('0');
   const [balanceFormatted, setBalanceFormatted] = useState<string>('0');
   const [price, setPrice] = useState<string>('0.0001395');
-  const [usePlaceholder, setUsePlaceholder] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isBSC, setIsBSC] = useState<boolean>(false);
   const [connectionStep, setConnectionStep] = useState<ConnectionStep>('authorization');
+  
+  // Store event listener references for cleanup
+  const eventListenersRef = useRef<{ ethereum: any; accountsChanged: ((accounts: unknown) => void) | null; chainChanged: ((chainId: string) => void) | null }>({
+    ethereum: null,
+    accountsChanged: null,
+    chainChanged: null,
+  });
+  
+  // Track if component is mounted to prevent state updates after unmount
+  const isMountedRef = useRef<boolean>(true);
+  
+  // Track ongoing balance fetch to prevent race conditions
+  const balanceFetchInProgressRef = useRef<boolean>(false);
+
+  // Component mount/unmount tracking
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Cleanup event listeners on unmount
+      cleanupEventListeners();
+    };
+  }, []);
 
   // Check if wallet is already connected on mount
   useEffect(() => {
-    checkConnection();
-    fetchPrice();
+    if (isMountedRef.current) {
+      checkConnection();
+      fetchPrice();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -41,12 +65,15 @@ export default function Home() {
   }, []);
 
   // Update balance when account changes or when connected
+  // CRITICAL: Prevent race conditions with ref check
   useEffect(() => {
-    if (account && isBSC && isConnected && connectionStep === 'connected') {
+    if (account && isBSC && isConnected && connectionStep === 'connected' && !balanceFetchInProgressRef.current) {
       console.log('Account or network changed, fetching balance...');
       // Small delay to ensure everything is ready
       const timer = setTimeout(() => {
-        fetchBalance();
+        if (isMountedRef.current && !balanceFetchInProgressRef.current) {
+          fetchBalance();
+        }
       }, 500);
       return () => clearTimeout(timer);
     }
@@ -55,11 +82,13 @@ export default function Home() {
 
   const checkConnection = async () => {
     try {
-      if (typeof window === 'undefined') return;
+      if (typeof window === 'undefined' || !isMountedRef.current) return;
       
       const ethereum = getCoinbaseProvider();
       if (!ethereum || !ethereum.request) {
-        setConnectionStep('authorization');
+        if (isMountedRef.current) {
+          setConnectionStep('authorization');
+        }
         return;
       }
 
@@ -68,37 +97,64 @@ export default function Home() {
         const accounts = await ethereum.request({ method: 'eth_accounts' }) as string[];
         console.log('Existing accounts check:', accounts);
         
-        if (accounts && accounts.length > 0) {
-          setAccount(accounts[0]);
-          setIsConnected(true);
-          setConnectionStep('connected');
-          await checkNetwork();
-        } else {
-          setConnectionStep('authorization');
+        if (isMountedRef.current) {
+          if (accounts && accounts.length > 0) {
+            setAccount(accounts[0]);
+            setIsConnected(true);
+            setConnectionStep('connected');
+            await checkNetwork();
+          } else {
+            setConnectionStep('authorization');
+          }
         }
       } catch (err) {
         console.log('No existing connection found');
-        setConnectionStep('authorization');
+        if (isMountedRef.current) {
+          setConnectionStep('authorization');
+        }
       }
     } catch (err) {
       console.error('Error checking connection:', err);
-      setConnectionStep('authorization');
+      if (isMountedRef.current) {
+        setConnectionStep('authorization');
+      }
     }
   };
 
   const checkNetwork = async () => {
     try {
-      if (typeof window === 'undefined') return;
+      if (typeof window === 'undefined' || !isMountedRef.current) return;
       const ethereum = getCoinbaseProvider();
       const chainId = await getCurrentChainId(ethereum);
       const isBSCNetwork = chainId === 56; // BSC mainnet chain ID
-      setIsBSC(isBSCNetwork);
       
-      if (!isBSCNetwork) {
-        setError('Please switch to BNB Smart Chain network');
+      if (isMountedRef.current) {
+        setIsBSC(isBSCNetwork);
+        if (!isBSCNetwork) {
+          setError('Please switch to BNB Smart Chain network');
+        }
       }
     } catch (err) {
       console.error('Error checking network:', err);
+    }
+  };
+  
+  // Cleanup event listeners
+  const cleanupEventListeners = () => {
+    if (eventListenersRef.current.ethereum) {
+      try {
+        if (eventListenersRef.current.accountsChanged && eventListenersRef.current.ethereum.removeListener) {
+          eventListenersRef.current.ethereum.removeListener('accountsChanged', eventListenersRef.current.accountsChanged);
+        }
+        if (eventListenersRef.current.chainChanged && eventListenersRef.current.ethereum.removeListener) {
+          eventListenersRef.current.ethereum.removeListener('chainChanged', eventListenersRef.current.chainChanged);
+        }
+      } catch (err) {
+        console.warn('Error removing event listeners:', err);
+      }
+      eventListenersRef.current.ethereum = null;
+      eventListenersRef.current.accountsChanged = null;
+      eventListenersRef.current.chainChanged = null;
     }
   };
 
@@ -179,30 +235,63 @@ export default function Home() {
         setConnectionStep('connected');
       }
 
-      // Listen for account changes
+      // Cleanup any existing event listeners first
+      cleanupEventListeners();
+      
+      // Store ethereum reference for cleanup
+      eventListenersRef.current.ethereum = ethereum;
+      
+      // Listen for account changes with error handling
       if (ethereum.on) {
-        ethereum.on('accountsChanged', (accounts: unknown) => {
-          const accountArray = accounts as string[];
-          if (!accountArray || accountArray.length === 0) {
-            disconnectWallet();
-          } else {
-            setAccount(accountArray[0]);
-            if (isBSC) {
-              fetchBalance();
+        const accountsChangedHandler = (accounts: unknown) => {
+          try {
+            if (!isMountedRef.current) return;
+            const accountArray = accounts as string[];
+            if (!accountArray || accountArray.length === 0) {
+              disconnectWallet();
+            } else {
+              const newAccount = accountArray[0];
+              setAccount(newAccount);
+              // Check current network state before fetching
+              getCurrentChainId(ethereum).then((chainId) => {
+                if (isMountedRef.current && chainId === 56) {
+                  fetchBalance();
+                }
+              }).catch((err) => {
+                console.error('Error checking chain ID in accountsChanged:', err);
+              });
             }
+          } catch (err) {
+            console.error('Error in accountsChanged handler:', err);
           }
-        });
-
-        // Listen for chain changes
-        ethereum.on('chainChanged', (chainId: string) => {
-          const chainIdNum = parseInt(chainId, 16);
-          setIsBSC(chainIdNum === 56);
-          if (chainIdNum === 56) {
-            fetchBalance();
-          } else {
-            setError('Please switch to BNB Smart Chain network');
+        };
+        
+        const chainChangedHandler = (chainId: string) => {
+          try {
+            if (!isMountedRef.current) return;
+            const chainIdNum = parseInt(chainId, 16);
+            setIsBSC(chainIdNum === 56);
+            if (chainIdNum === 56) {
+              // Small delay to ensure network switch is complete
+              setTimeout(() => {
+                if (isMountedRef.current) {
+                  fetchBalance();
+                }
+              }, 1000);
+            } else {
+              setError('Please switch to BNB Smart Chain network');
+            }
+          } catch (err) {
+            console.error('Error in chainChanged handler:', err);
           }
-        });
+        };
+        
+        // Store handlers for cleanup
+        eventListenersRef.current.accountsChanged = accountsChangedHandler;
+        eventListenersRef.current.chainChanged = chainChangedHandler;
+        
+        ethereum.on('accountsChanged', accountsChangedHandler);
+        ethereum.on('chainChanged', chainChangedHandler);
       }
 
     } catch (err: any) {
@@ -217,17 +306,31 @@ export default function Home() {
   };
 
   const disconnectWallet = () => {
+    // Cleanup event listeners
+    cleanupEventListeners();
+    
+    // Reset provider instance to allow fresh connection
+    if (typeof window !== 'undefined') {
+      resetProviderInstance();
+    }
+    
     setAccount(null);
     setIsConnected(false);
     setBalance('0');
     setBalanceFormatted('0');
-    setUsePlaceholder(false);
     setIsBSC(false);
     setError(null);
     setConnectionStep('authorization');
+    balanceFetchInProgressRef.current = false;
   };
 
   const fetchBalance = async (retryCount = 0) => {
+    // Prevent concurrent balance fetches
+    if (balanceFetchInProgressRef.current) {
+      console.log('Balance fetch already in progress, skipping...');
+      return;
+    }
+    
     if (!account) {
       console.log('No account set, skipping balance fetch');
       return;
@@ -237,7 +340,13 @@ export default function Home() {
       console.log('Not on BSC network, skipping balance fetch');
       return;
     }
+    
+    if (!isMountedRef.current) {
+      console.log('Component unmounted, skipping balance fetch');
+      return;
+    }
 
+    balanceFetchInProgressRef.current = true;
     setLoading(true);
     setError(null);
 
@@ -262,10 +371,14 @@ export default function Home() {
           throw new Error('No accounts available in provider');
         }
         if (testAccounts[0].toLowerCase() !== account.toLowerCase()) {
-          console.warn('Account mismatch:', { 
+          console.warn('Account mismatch detected, updating account:', { 
             expected: account, 
             got: testAccounts[0] 
           });
+          // Update account to match provider
+          if (isMountedRef.current) {
+            setAccount(testAccounts[0]);
+          }
         }
       }
 
@@ -329,9 +442,9 @@ export default function Home() {
       const rawBalance = tethData.balanceFormatted;
       const balanceNum = parseFloat(rawBalance);
       
-      // Always use the actual balance from wallet (no placeholder)
-      setUsePlaceholder(false);
-      setBalance(tethData.balance);
+      // Always use the actual balance from wallet
+      if (isMountedRef.current) {
+        setBalance(tethData.balance);
       
       // Format balance with proper decimal handling
       let formatted: string;
@@ -349,13 +462,14 @@ export default function Home() {
         });
       }
       
-      setBalanceFormatted(formatted);
+        setBalanceFormatted(formatted);
 
-      console.log('=== Balance Update Complete ===');
-      console.log('Raw balance string:', tethData.balance);
-      console.log('Formatted balance string:', tethData.balanceFormatted);
-      console.log('Balance number:', balanceNum);
-      console.log('Final formatted display:', formatted);
+        console.log('=== Balance Update Complete ===');
+        console.log('Raw balance string:', tethData.balance);
+        console.log('Formatted balance string:', tethData.balanceFormatted);
+        console.log('Balance number:', balanceNum);
+        console.log('Final formatted display:', formatted);
+      }
 
     } catch (err: any) {
       console.error('=== Error Fetching Balance ===');
@@ -376,18 +490,24 @@ export default function Home() {
       
       // After all retries failed, show error
       console.error('All retries failed');
-      setBalance('0');
-      setBalanceFormatted('0');
-      setUsePlaceholder(false);
+      if (isMountedRef.current) {
+        setBalance('0');
+        setBalanceFormatted('0');
+      }
     } finally {
-      setLoading(false);
+      balanceFetchInProgressRef.current = false;
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   const fetchPrice = async () => {
     try {
       const priceData = await fetchTETHPrice();
-      setPrice(priceData.priceUsd);
+      if (isMountedRef.current) {
+        setPrice(priceData.priceUsd);
+      }
     } catch (err) {
       console.error('Error fetching price:', err);
     }

@@ -65,21 +65,17 @@ export async function getTETHBalance(
   // Ensure provider is ready
   await provider.ready;
   
-  // Verify network
+  // Verify network (only check once to avoid redundant calls)
   const network = await provider.getNetwork();
   console.log('Network chain ID:', network.chainId);
+  console.log('Provider network details:', {
+    chainId: network.chainId,
+    name: network.name
+  });
   
   if (network.chainId !== 56) {
     throw new Error(`Wrong network. Expected BSC (56), got ${network.chainId}. Please switch to BNB Smart Chain.`);
   }
-
-  // CRITICAL: Verify the provider is actually connected to BSC
-  // Get the actual RPC endpoint being used
-  const providerNetwork = await provider.getNetwork();
-  console.log('Provider network details:', {
-    chainId: providerNetwork.chainId,
-    name: providerNetwork.name
-  });
   
   // Double-check by making a direct RPC call to verify network
   try {
