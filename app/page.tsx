@@ -269,17 +269,28 @@ export default function Home() {
         }
       }
 
-      const provider = new ethers.providers.Web3Provider(ethereum as any);
+      // Create ethers provider with explicit network configuration
+      // CRITICAL: Force BSC network to ensure contract calls use correct RPC
+      const provider = new ethers.providers.Web3Provider(ethereum as any, {
+        name: 'bnb',
+        chainId: 56,
+      });
       
       // Wait for network to be ready
       console.log('Waiting for provider to be ready...');
       await provider.ready;
       
-      // Verify network
+      // Verify network - but also check actual chain ID from provider
       const network = await provider.getNetwork();
       console.log('Provider network:', network);
-      if (network.chainId !== 56) {
-        throw new Error(`Wrong network. Expected BSC (56), got ${network.chainId}`);
+      
+      // Also verify actual chain ID from the wallet
+      const actualChainId = await ethereum.request({ method: 'eth_chainId' });
+      const actualChainIdNum = parseInt(actualChainId, 16);
+      console.log('Wallet chain ID:', actualChainIdNum);
+      
+      if (network.chainId !== 56 || actualChainIdNum !== 56) {
+        throw new Error(`Wrong network. Expected BSC (56), got provider: ${network.chainId}, wallet: ${actualChainIdNum}`);
       }
 
       // Verify account is correct - use the account from state
@@ -483,7 +494,8 @@ export default function Home() {
                   {loading ? (
                     <span className="loading-spinner"></span>
                   ) : (() => {
-                    const balanceNum = parseFloat(balance.replace(/,/g, ''));
+                    // Parse the formatted balance string, not the raw balance
+                    const balanceNum = parseFloat(balanceFormatted.replace(/,/g, ''));
                     if (isNaN(balanceNum) || balanceNum === 0) {
                       return <span style={{ color: '#666' }}>0 TETH</span>;
                     }

@@ -73,6 +73,22 @@ export async function getTETHBalance(
     throw new Error(`Wrong network. Expected BSC (56), got ${network.chainId}. Please switch to BNB Smart Chain.`);
   }
 
+  // CRITICAL: Verify the provider is actually connected to BSC
+  // Get the actual RPC endpoint being used
+  const providerNetwork = await provider.getNetwork();
+  console.log('Provider network details:', {
+    chainId: providerNetwork.chainId,
+    name: providerNetwork.name
+  });
+  
+  // Double-check by making a direct RPC call to verify network
+  try {
+    const blockNumber = await provider.getBlockNumber();
+    console.log('Current BSC block number:', blockNumber);
+  } catch (blockErr) {
+    console.warn('Could not fetch block number:', blockErr);
+  }
+
   // Create contract instance using the wallet provider
   const contract = new ethers.Contract(
     TETH_CONTRACT_ADDRESS,
@@ -83,6 +99,10 @@ export async function getTETHBalance(
   console.log('Contract instance created, fetching from wallet provider...');
   console.log('Contract address:', TETH_CONTRACT_ADDRESS);
   console.log('Querying address:', normalizedAddress);
+  
+  // Verify contract address is correct format
+  const contractAddressChecksum = ethers.utils.getAddress(TETH_CONTRACT_ADDRESS);
+  console.log('Contract address (checksum):', contractAddressChecksum);
 
   // First, get decimals to ensure contract is accessible
   let decimals = 18;
@@ -94,6 +114,7 @@ export async function getTETHBalance(
   }
 
   // Fetch balance with timeout and retry
+  // CRITICAL: Use callStatic for more reliable balance fetching
   let balance: ethers.BigNumber | null = null;
   let attempts = 0;
   const maxAttempts = 3;
@@ -101,24 +122,57 @@ export async function getTETHBalance(
   while (attempts < maxAttempts && balance === null) {
     try {
       console.log(`Fetching balance (attempt ${attempts + 1}/${maxAttempts})...`);
+      console.log('Using address:', normalizedAddress);
+      console.log('Contract address:', contractAddressChecksum);
+      
+      // Try using callStatic first (more reliable for view functions)
       const fetchedBalance = await Promise.race([
-        contract.balanceOf(normalizedAddress),
+        contract.callStatic.balanceOf(normalizedAddress).catch(() => {
+          // Fallback to regular call if callStatic fails
+          console.log('callStatic failed, trying regular call...');
+          return contract.balanceOf(normalizedAddress);
+        }),
         new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Balance fetch timeout')), 10000)
+          setTimeout(() => reject(new Error('Balance fetch timeout')), 15000)
         )
       ]);
+      
       balance = fetchedBalance;
       if (balance) {
         console.log('✅ Balance fetched successfully:', balance.toString());
+        console.log('Balance in hex:', balance.toHexString());
+        console.log('Balance is zero?', balance.isZero());
       }
     } catch (balanceErr: any) {
       attempts++;
-      console.error(`Balance fetch attempt ${attempts} failed:`, balanceErr.message);
+      console.error(`Balance fetch attempt ${attempts} failed:`, balanceErr);
+      console.error('Error code:', balanceErr.code);
+      console.error('Error message:', balanceErr.message);
+      console.error('Error data:', balanceErr.data);
+      
       if (attempts >= maxAttempts) {
-        throw new Error(`Failed to fetch balance after ${maxAttempts} attempts: ${balanceErr.message}`);
+        // Last attempt: try direct RPC call
+        try {
+          console.log('Attempting direct RPC call as last resort...');
+          const data = contract.interface.encodeFunctionData('balanceOf', [normalizedAddress]);
+          const result = await provider.call({
+            to: contractAddressChecksum,
+            data: data
+          });
+          const decoded = contract.interface.decodeFunctionResult('balanceOf', result);
+          const directBalance = decoded[0];
+          balance = directBalance;
+          if (balance) {
+            console.log('✅ Direct RPC call succeeded:', balance.toString());
+          }
+          break;
+        } catch (directErr) {
+          console.error('Direct RPC call also failed:', directErr);
+          throw new Error(`Failed to fetch balance after ${maxAttempts} attempts: ${balanceErr.message}`);
+        }
       }
       // Wait before retry
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
 
