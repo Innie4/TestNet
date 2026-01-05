@@ -6,6 +6,10 @@ import { getCoinbaseProvider } from '@/lib/coinbaseWallet';
 import { getTETHBalance, switchToBSC, getCurrentChainId } from '@/lib/tethToken';
 import { fetchTETHPrice, calculateUSDValue } from '@/lib/priceFetcher';
 import { BSC_NETWORK } from '@/lib/constants';
+import WalletAuthorization from '@/components/WalletAuthorization';
+import WalletConnecting from '@/components/WalletConnecting';
+
+type ConnectionStep = 'authorization' | 'connecting' | 'switching' | 'fetching' | 'connected';
 
 export default function Home() {
   const [account, setAccount] = useState<string | null>(null);
@@ -17,6 +21,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isBSC, setIsBSC] = useState<boolean>(false);
+  const [connectionStep, setConnectionStep] = useState<ConnectionStep>('authorization');
 
   // Check if wallet is already connected on mount
   useEffect(() => {
@@ -52,11 +57,17 @@ export default function Home() {
         if (accounts.length > 0) {
           setAccount(accounts[0]);
           setIsConnected(true);
+          setConnectionStep('connected');
           await checkNetwork();
+        } else {
+          setConnectionStep('authorization');
         }
+      } else {
+        setConnectionStep('authorization');
       }
     } catch (err) {
       console.error('Error checking connection:', err);
+      setConnectionStep('authorization');
     }
   };
 
@@ -76,9 +87,20 @@ export default function Home() {
     }
   };
 
+  const handleAuthorize = () => {
+    setConnectionStep('connecting');
+    connectWallet();
+  };
+
+  const handleCancel = () => {
+    setConnectionStep('authorization');
+    setError(null);
+  };
+
   const connectWallet = async () => {
     setLoading(true);
     setError(null);
+    setConnectionStep('connecting');
 
     try {
       if (typeof window === 'undefined') {
@@ -92,12 +114,14 @@ export default function Home() {
       }
 
       // Perform the Coinbase Handshake (eth_requestAccounts)
+      // Note: This will still trigger browser popup, but we've explained it to the user
+      setConnectionStep('connecting');
       const accounts = await ethereum.request({
         method: 'eth_requestAccounts',
       });
 
       if (accounts.length === 0) {
-        throw new Error('No accounts found');
+        throw new Error('No accounts found. Please approve the connection.');
       }
 
       setAccount(accounts[0]);
@@ -109,48 +133,61 @@ export default function Home() {
       
       if (chainId !== 56) {
         console.log('Not on BSC, attempting to switch...');
+        setConnectionStep('switching');
         const switched = await switchToBSC(ethereum);
         if (switched) {
           console.log('Successfully switched to BSC');
           setIsBSC(true);
           // Wait a bit for network switch to complete
           await new Promise(resolve => setTimeout(resolve, 1000));
+          setConnectionStep('fetching');
           await fetchBalance();
+          setConnectionStep('connected');
         } else {
           setError('Failed to switch to BNB Smart Chain. Please switch manually.');
+          setConnectionStep('connected');
         }
       } else {
         console.log('Already on BSC network');
         setIsBSC(true);
+        setConnectionStep('fetching');
         // Small delay to ensure provider is ready
         await new Promise(resolve => setTimeout(resolve, 500));
         await fetchBalance();
+        setConnectionStep('connected');
       }
 
       // Listen for account changes
-      ethereum.on('accountsChanged', (accounts: string[]) => {
-        if (accounts.length === 0) {
-          disconnectWallet();
-        } else {
-          setAccount(accounts[0]);
-        }
-      });
+      if (ethereum.on) {
+        ethereum.on('accountsChanged', (accounts: string[]) => {
+          if (accounts.length === 0) {
+            disconnectWallet();
+          } else {
+            setAccount(accounts[0]);
+            if (isBSC) {
+              fetchBalance();
+            }
+          }
+        });
 
-      // Listen for chain changes
-      ethereum.on('chainChanged', (chainId: string) => {
-        const chainIdNum = parseInt(chainId, 16);
-        setIsBSC(chainIdNum === 56);
-        if (chainIdNum === 56) {
-          fetchBalance();
-        } else {
-          setError('Please switch to BNB Smart Chain network');
-        }
-      });
+        // Listen for chain changes
+        ethereum.on('chainChanged', (chainId: string) => {
+          const chainIdNum = parseInt(chainId, 16);
+          setIsBSC(chainIdNum === 56);
+          if (chainIdNum === 56) {
+            fetchBalance();
+          } else {
+            setError('Please switch to BNB Smart Chain network');
+          }
+        });
+      }
 
     } catch (err: any) {
       console.error('Error connecting wallet:', err);
-      setError(err.message || 'Failed to connect wallet');
+      const errorMessage = err.message || 'Failed to connect wallet';
+      setError(errorMessage);
       setIsConnected(false);
+      setConnectionStep('authorization');
     } finally {
       setLoading(false);
     }
@@ -164,6 +201,7 @@ export default function Home() {
     setUsdValue('0.00');
     setIsBSC(false);
     setError(null);
+    setConnectionStep('authorization');
   };
 
   const fetchBalance = async () => {
@@ -242,32 +280,32 @@ export default function Home() {
         </div>
       )}
 
-      {isConnected ? (
-        <div className="status connected">
-          ✓ Connected to Coinbase Wallet
-        </div>
-      ) : (
-        <div className="status disconnected">
-          ⚠ Not Connected
-        </div>
+      {/* Authorization Step */}
+      {connectionStep === 'authorization' && !isConnected && (
+        <WalletAuthorization
+          onAuthorize={handleAuthorize}
+          onCancel={handleCancel}
+        />
       )}
 
-      {!isConnected ? (
-        <button
-          className="button"
-          onClick={connectWallet}
-          disabled={loading}
-        >
-          {loading ? (
-            <>
-              <span className="loading-spinner"></span>
-              Connecting...
-            </>
-          ) : (
-            '🔗 Connect Coinbase Wallet'
-          )}
-        </button>
-      ) : (
+      {/* Connecting Steps */}
+      {(connectionStep === 'connecting' || connectionStep === 'switching' || connectionStep === 'fetching') && (
+        <WalletConnecting
+          step={connectionStep}
+          error={error}
+        />
+      )}
+
+      {/* Connected State */}
+      {connectionStep === 'connected' && isConnected && (
+        <>
+          <div className="status connected">
+            ✓ Connected to Coinbase Wallet
+          </div>
+        </>
+      )}
+
+      {connectionStep === 'connected' && isConnected && (
         <>
           {!isBSC && (
             <button

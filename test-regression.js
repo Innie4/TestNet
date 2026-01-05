@@ -104,6 +104,18 @@ function testAppStructure() {
   });
 }
 
+// Test 6: Check if components exist
+function testComponents() {
+  const componentFiles = [
+    'components/WalletAuthorization.tsx',
+    'components/WalletConnecting.tsx'
+  ];
+  
+  componentFiles.forEach(file => {
+    testFileExists(file, `Component file exists: ${file}`);
+  });
+}
+
 // Run all tests
 console.log('📁 Testing file structure...\n');
 testFileExists('package.json', 'package.json exists');
@@ -123,6 +135,9 @@ testLibFiles();
 
 console.log('\n📱 Testing app structure...\n');
 testAppStructure();
+
+console.log('\n🧩 Testing components...\n');
+testComponents();
 
 // Summary
 console.log('\n' + '='.repeat(50));
