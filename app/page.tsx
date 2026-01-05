@@ -56,9 +56,18 @@ export default function Home() {
   const checkConnection = async () => {
     try {
       if (typeof window === 'undefined') return;
+      
       const ethereum = getCoinbaseProvider();
-      if (ethereum && ethereum.selectedAddress) {
+      if (!ethereum || !ethereum.request) {
+        setConnectionStep('authorization');
+        return;
+      }
+
+      // Check for existing connection using eth_accounts
+      try {
         const accounts = await ethereum.request({ method: 'eth_accounts' }) as string[];
+        console.log('Existing accounts check:', accounts);
+        
         if (accounts && accounts.length > 0) {
           setAccount(accounts[0]);
           setIsConnected(true);
@@ -67,7 +76,8 @@ export default function Home() {
         } else {
           setConnectionStep('authorization');
         }
-      } else {
+      } catch (err) {
+        console.log('No existing connection found');
         setConnectionStep('authorization');
       }
     } catch (err) {
@@ -114,16 +124,23 @@ export default function Home() {
       
       const ethereum = getCoinbaseProvider();
       
-      if (!ethereum) {
-        throw new Error('Coinbase Wallet not detected. Please install Coinbase Wallet extension.');
+      if (!ethereum || !ethereum.request) {
+        throw new Error('Coinbase Smart Wallet not available. Please ensure Coinbase Wallet is installed.');
       }
 
+      console.log('=== Initiating Coinbase Smart Wallet Connection ===');
+      console.log('Provider type:', ethereum.constructor?.name);
+      
       // Perform the Coinbase Handshake (eth_requestAccounts)
-      // This connects to Coinbase Smart Wallet (not browser extension)
+      // This connects to Coinbase Smart Wallet (NOT browser extension)
       setConnectionStep('connecting');
+      
+      console.log('Requesting accounts from Coinbase Smart Wallet...');
       const accounts = await ethereum.request({
         method: 'eth_requestAccounts',
       }) as string[];
+      
+      console.log('Accounts received:', accounts);
 
       if (!accounts || accounts.length === 0) {
         throw new Error('No accounts found. Please approve the connection.');
@@ -265,20 +282,30 @@ export default function Home() {
         throw new Error(`Wrong network. Expected BSC (56), got ${network.chainId}`);
       }
 
-      // Verify account is correct
-      const signer = provider.getSigner();
-      const signerAddress = await signer.getAddress();
-      console.log('Signer address:', signerAddress);
-      if (signerAddress.toLowerCase() !== account.toLowerCase()) {
-        console.warn('Address mismatch, using signer address:', signerAddress);
-        setAccount(signerAddress);
+      // Verify account is correct - use the account from state
+      // The account from eth_requestAccounts is the correct one
+      const addressToCheck = ethers.utils.getAddress(account);
+      console.log('Using account for balance check:', addressToCheck);
+      
+      // Verify signer matches
+      try {
+        const signer = provider.getSigner();
+        const signerAddress = await signer.getAddress();
+        console.log('Signer address from provider:', signerAddress);
+        
+        if (signerAddress.toLowerCase() !== account.toLowerCase()) {
+          console.warn('Signer address differs, using account from connection:', {
+            account,
+            signer: signerAddress
+          });
+          // Use the account from connection, not signer
+        }
+      } catch (signerErr) {
+        console.warn('Could not get signer address, using account directly:', signerErr);
       }
-
-      // Use signer address for balance check - use checksum format
-      const addressToCheck = ethers.utils.getAddress(signerAddress);
-      console.log('Fetching balance for address:', addressToCheck);
       
       // Fetch balance from connected wallet (Coinbase Smart Wallet)
+      console.log('Fetching balance for address:', addressToCheck);
       const tethData = await getTETHBalance(provider, addressToCheck);
       console.log('=== Balance Data Received from Wallet ===');
       console.log('Raw balance:', tethData.balance);

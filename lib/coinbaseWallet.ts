@@ -70,6 +70,9 @@ export const getWalletConnectionMethod = (): 'extension' | 'mobile' | 'unknown' 
   return 'mobile';
 };
 
+// Store the SDK provider instance
+let sdkProviderInstance: any = null;
+
 // Get the Ethereum provider from Coinbase Wallet
 // ALWAYS uses Coinbase Smart Wallet SDK (NEVER browser extension)
 // This ensures connection goes through Coinbase Smart Wallet, not browser popups
@@ -78,48 +81,59 @@ export const getCoinbaseProvider = () => {
     throw new Error('Window is not defined');
   }
 
-  // CRITICAL: Block any browser extension from being used
-  // Remove window.ethereum temporarily to force SDK-only connection
+  // If we already have a provider instance, reuse it
+  if (sdkProviderInstance) {
+    console.log('Reusing existing Coinbase Smart Wallet SDK provider');
+    return sdkProviderInstance;
+  }
+
+  // CRITICAL: Completely block browser extension
+  // Store original ethereum to restore later if needed
   const originalEthereum = (window as any).ethereum;
-  const originalProviders = (window as any).ethereum?.providers;
+  const hadEthereum = !!originalEthereum;
   
-  // Temporarily hide browser extension to force Smart Wallet SDK
-  if ((window as any).ethereum) {
+  // Remove window.ethereum completely to force SDK-only
+  if (hadEthereum) {
+    console.log('Blocking browser extension (window.ethereum)');
     delete (window as any).ethereum;
   }
 
   try {
     // ALWAYS use Coinbase Wallet SDK to target Smart Wallet
-    // This bypasses browser extension and connects directly to Coinbase Smart Wallet
-    console.log('=== FORCING Coinbase Smart Wallet SDK Connection ===');
-    console.log('Blocking browser extension, using Smart Wallet only');
+    console.log('=== INITIALIZING Coinbase Smart Wallet SDK ===');
+    console.log('Browser extension blocked, using Smart Wallet SDK only');
     
     const sdk = initializeSDK();
     
     // Create Web3 provider for BSC
-    // The SDK will:
-    // - Use Coinbase Smart Wallet ONLY (not browser extension)
-    // - Mobile: Deep linking to Coinbase Wallet app
-    // - Desktop: QR code for mobile wallet scanning or Smart Wallet connection
+    // The SDK will connect through Coinbase Smart Wallet (not browser)
     const provider = sdk.makeWeb3Provider(
       "https://bsc-dataseed.binance.org/",
       56 // BSC chain ID
     );
 
-    console.log('✅ Using Coinbase Smart Wallet SDK provider (NOT browser extension)');
+    // Store the provider instance
+    sdkProviderInstance = provider;
     
-    // Restore original ethereum (for other uses, but SDK provider is already created)
-    if (originalEthereum) {
+    console.log('✅ Coinbase Smart Wallet SDK provider created');
+    console.log('Provider type:', provider.constructor.name);
+    console.log('Provider has request method:', typeof provider.request === 'function');
+    
+    // Restore original ethereum after provider is created
+    // The SDK provider is already initialized, so it won't use browser extension
+    if (hadEthereum) {
       (window as any).ethereum = originalEthereum;
+      console.log('Restored window.ethereum (SDK provider already created)');
     }
     
     return provider;
-  } catch (error) {
+  } catch (error: any) {
+    console.error('Error creating SDK provider:', error);
     // Restore original ethereum on error
-    if (originalEthereum) {
+    if (hadEthereum) {
       (window as any).ethereum = originalEthereum;
     }
-    throw error;
+    throw new Error(`Failed to initialize Coinbase Smart Wallet: ${error.message}`);
   }
 };
 

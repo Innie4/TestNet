@@ -81,28 +81,68 @@ export async function getTETHBalance(
   );
 
   console.log('Contract instance created, fetching from wallet provider...');
+  console.log('Contract address:', TETH_CONTRACT_ADDRESS);
+  console.log('Querying address:', normalizedAddress);
 
-  // Fetch all data from the connected wallet
-  const [balance, decimals, symbol, name] = await Promise.all([
-    contract.balanceOf(normalizedAddress),
-    contract.decimals().catch(() => {
-      console.warn('Decimals call failed, using default 18');
-      return 18;
-    }),
-    contract.symbol().catch(() => {
-      console.warn('Symbol call failed, using default TETH');
-      return 'TETH';
-    }),
-    contract.name().catch(() => {
-      console.warn('Name call failed, using default Tethereum');
-      return 'Tethereum';
-    })
-  ]);
+  // First, get decimals to ensure contract is accessible
+  let decimals = 18;
+  try {
+    decimals = await contract.decimals();
+    console.log('✅ Decimals fetched:', decimals);
+  } catch (decErr: any) {
+    console.warn('Decimals call failed, using default 18:', decErr.message);
+  }
+
+  // Fetch balance with timeout and retry
+  let balance: ethers.BigNumber | null = null;
+  let attempts = 0;
+  const maxAttempts = 3;
   
-  console.log('✅ Balance fetched from wallet:', balance.toString());
+  while (attempts < maxAttempts && balance === null) {
+    try {
+      console.log(`Fetching balance (attempt ${attempts + 1}/${maxAttempts})...`);
+      const fetchedBalance = await Promise.race([
+        contract.balanceOf(normalizedAddress),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Balance fetch timeout')), 10000)
+        )
+      ]);
+      balance = fetchedBalance;
+      if (balance) {
+        console.log('✅ Balance fetched successfully:', balance.toString());
+      }
+    } catch (balanceErr: any) {
+      attempts++;
+      console.error(`Balance fetch attempt ${attempts} failed:`, balanceErr.message);
+      if (attempts >= maxAttempts) {
+        throw new Error(`Failed to fetch balance after ${maxAttempts} attempts: ${balanceErr.message}`);
+      }
+      // Wait before retry
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  if (!balance) {
+    throw new Error('Failed to fetch balance: all attempts exhausted');
+  }
+
+  // Fetch symbol and name (non-critical)
+  let symbol = 'TETH';
+  let name = 'Tethereum';
+  try {
+    [symbol, name] = await Promise.all([
+      contract.symbol().catch(() => 'TETH'),
+      contract.name().catch(() => 'Tethereum')
+    ]);
+    console.log('Symbol:', symbol);
+    console.log('Name:', name);
+  } catch (err) {
+    console.warn('Could not fetch symbol/name, using defaults');
+  }
+  
+  console.log('✅ All data fetched successfully');
+  console.log('Balance:', balance.toString());
   console.log('Decimals:', decimals);
-  console.log('Symbol:', symbol);
-  console.log('Name:', name);
 
   // Format balance
   const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
