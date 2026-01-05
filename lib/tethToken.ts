@@ -27,8 +27,16 @@ export async function getTETHBalance(
       throw new Error(`Wrong network. Expected BSC (56), got ${network.chainId}`);
     }
 
-    // Normalize address (ensure checksum)
-    const normalizedAddress = ethers.utils.getAddress(userAddress);
+    // Normalize address - handle both checksum and lowercase
+    let normalizedAddress: string;
+    try {
+      // Try to get checksum address
+      normalizedAddress = ethers.utils.getAddress(userAddress);
+    } catch (e) {
+      // If checksum fails, use lowercase and try again
+      normalizedAddress = ethers.utils.getAddress(userAddress.toLowerCase());
+    }
+    console.log('Original address:', userAddress);
     console.log('Normalized user address:', normalizedAddress);
     console.log('Contract address:', TETH_CONTRACT_ADDRESS);
 
@@ -78,25 +86,49 @@ export async function getTETHBalance(
       name = 'Tethereum';
     }
 
-    // Format balance
+    // Format balance - ensure we're using the correct decimals
     const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
-    console.log('Final formatted balance:', balanceFormatted);
+    console.log('Balance BigNumber:', balance.toString());
+    console.log('Decimals used:', decimals);
+    console.log('Formatted balance string:', balanceFormatted);
 
-    // Verify balance is not null/undefined
-    if (!balance || balance.toString() === '0') {
-      console.warn('Balance is 0 or null. Double-checking...');
-      // Try one more time with a direct call
+    // Verify balance is valid
+    if (!balance || balance.isZero()) {
+      console.warn('Balance is 0. Verifying with direct contract call...');
+      // Try one more time with a direct call using callStatic for reliability
       try {
-        const recheckBalance = await contract.balanceOf(normalizedAddress);
-        console.log('Recheck balance:', recheckBalance.toString());
-        if (recheckBalance.toString() !== balance.toString()) {
+        const recheckBalance = await contract.callStatic.balanceOf(normalizedAddress);
+        console.log('Recheck balance (callStatic):', recheckBalance.toString());
+        if (!recheckBalance.isZero() && !recheckBalance.eq(balance)) {
+          console.log('Balance changed on recheck, using new value');
           balance = recheckBalance;
           const recheckFormatted = ethers.utils.formatUnits(balance, decimals);
           console.log('Recheck formatted:', recheckFormatted);
+        } else if (recheckBalance.isZero()) {
+          console.log('Confirmed: Balance is actually 0 for this address');
         }
-      } catch (recheckErr) {
+      } catch (recheckErr: any) {
         console.error('Recheck failed:', recheckErr);
+        // Try one more method - direct RPC call
+        try {
+          const data = contract.interface.encodeFunctionData('balanceOf', [normalizedAddress]);
+          const result = await provider.call({
+            to: TETH_CONTRACT_ADDRESS,
+            data: data
+          });
+          const decoded = contract.interface.decodeFunctionResult('balanceOf', result);
+          console.log('Direct RPC call balance:', decoded[0].toString());
+          if (!decoded[0].isZero()) {
+            balance = decoded[0];
+            const directFormatted = ethers.utils.formatUnits(balance, decimals);
+            console.log('Direct RPC formatted:', directFormatted);
+          }
+        } catch (directErr) {
+          console.error('Direct RPC call also failed:', directErr);
+        }
       }
+    } else {
+      console.log('Balance is non-zero:', balance.toString());
     }
 
     return {

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import { getCoinbaseProvider } from '@/lib/coinbaseWallet';
 import { getTETHBalance, switchToBSC, getCurrentChainId } from '@/lib/tethToken';
-import { fetchTETHPrice, calculateUSDValue } from '@/lib/priceFetcher';
+import { fetchTETHPrice } from '@/lib/priceFetcher';
 import { BSC_NETWORK } from '@/lib/constants';
 import WalletAuthorization from '@/components/WalletAuthorization';
 import WalletConnecting from '@/components/WalletConnecting';
@@ -16,7 +16,6 @@ export default function Home() {
   const [balance, setBalance] = useState<string>('0');
   const [balanceFormatted, setBalanceFormatted] = useState<string>('0');
   const [price, setPrice] = useState<string>('0.0001395');
-  const [usdValue, setUsdValue] = useState<string>('0.00');
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
@@ -204,7 +203,6 @@ export default function Home() {
     setIsConnected(false);
     setBalance('0');
     setBalanceFormatted('0');
-    setUsdValue('0.00');
     setIsBSC(false);
     setError(null);
     setConnectionStep('authorization');
@@ -274,8 +272,8 @@ export default function Home() {
         setAccount(signerAddress);
       }
 
-      // Use signer address for balance check
-      const addressToCheck = signerAddress.toLowerCase();
+      // Use signer address for balance check - use checksum format
+      const addressToCheck = ethers.utils.getAddress(signerAddress);
       console.log('Fetching balance for address:', addressToCheck);
       
       const tethData = await getTETHBalance(provider, addressToCheck);
@@ -290,22 +288,32 @@ export default function Home() {
       const rawBalance = tethData.balanceFormatted;
       setBalance(tethData.balance);
       
-      // Format balance with proper decimal handling
+      // Format balance with proper decimal handling - preserve full precision
       const balanceNum = parseFloat(rawBalance);
-      const formatted = balanceNum.toLocaleString('en-US', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 6,
-      });
+      
+      // If balance is very small, show more decimals, otherwise show up to 6
+      let formatted: string;
+      if (balanceNum > 0 && balanceNum < 0.000001) {
+        // For very small balances, show up to 12 decimal places
+        formatted = balanceNum.toFixed(12).replace(/\.?0+$/, '');
+      } else if (balanceNum > 0 && balanceNum < 1) {
+        // For balances less than 1, show up to 8 decimal places
+        formatted = balanceNum.toFixed(8).replace(/\.?0+$/, '');
+      } else {
+        // For larger balances, use locale formatting with up to 6 decimals
+        formatted = balanceNum.toLocaleString('en-US', {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 6,
+        });
+      }
+      
       setBalanceFormatted(formatted);
 
-      // Calculate USD value
-      const priceNum = parseFloat(price);
-      const usd = calculateUSDValue(rawBalance, priceNum);
-      setUsdValue(usd);
-
       console.log('=== Balance Update Complete ===');
-      console.log('Formatted:', formatted);
-      console.log('USD Value:', usd);
+      console.log('Raw balance string:', tethData.balance);
+      console.log('Formatted balance string:', tethData.balanceFormatted);
+      console.log('Balance number:', balanceNum);
+      console.log('Final formatted display:', formatted);
 
       // If balance is 0, log additional info for debugging
       if (balanceNum === 0) {
@@ -335,7 +343,6 @@ export default function Home() {
       // Set default values on error after retries
       setBalance('0');
       setBalanceFormatted('0');
-      setUsdValue('0.00');
     } finally {
       setLoading(false);
     }
@@ -345,12 +352,6 @@ export default function Home() {
     try {
       const priceData = await fetchTETHPrice();
       setPrice(priceData.priceUsd);
-      
-      // Update USD value if balance is already loaded
-      if (balanceFormatted !== '0') {
-        const usd = calculateUSDValue(balanceFormatted.replace(/,/g, ''), priceData.price);
-        setUsdValue(usd);
-      }
     } catch (err) {
       console.error('Error fetching price:', err);
     }
@@ -456,17 +457,14 @@ export default function Home() {
                 <span className="info-value">
                   {loading ? (
                     <span className="loading-spinner"></span>
-                  ) : balanceFormatted === '0' ? (
-                    <span style={{ color: '#ef4444' }}>0 TETH (No balance found)</span>
-                  ) : (
-                    `${balanceFormatted} TETH`
-                  )}
+                  ) : (() => {
+                    const balanceNum = parseFloat(balance.replace(/,/g, ''));
+                    if (isNaN(balanceNum) || balanceNum === 0) {
+                      return <span style={{ color: '#ef4444' }}>0 TETH</span>;
+                    }
+                    return `${balanceFormatted} TETH`;
+                  })()}
                 </span>
-              </div>
-
-              <div className="info-row">
-                <span className="info-label">USD Value:</span>
-                <span className="info-value">${usdValue}</span>
               </div>
             </div>
           )}
