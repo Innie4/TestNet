@@ -105,16 +105,25 @@ export default function Home() {
 
       // Check and switch to BSC network
       const chainId = await getCurrentChainId(ethereum);
+      console.log('Current chain ID:', chainId);
+      
       if (chainId !== 56) {
+        console.log('Not on BSC, attempting to switch...');
         const switched = await switchToBSC(ethereum);
         if (switched) {
+          console.log('Successfully switched to BSC');
           setIsBSC(true);
+          // Wait a bit for network switch to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
           await fetchBalance();
         } else {
           setError('Failed to switch to BNB Smart Chain. Please switch manually.');
         }
       } else {
+        console.log('Already on BSC network');
         setIsBSC(true);
+        // Small delay to ensure provider is ready
+        await new Promise(resolve => setTimeout(resolve, 500));
         await fetchBalance();
       }
 
@@ -301,6 +310,8 @@ export default function Home() {
                 <span className="info-value">
                   {loading ? (
                     <span className="loading-spinner"></span>
+                  ) : balanceFormatted === '0' ? (
+                    <span style={{ color: '#ef4444' }}>0 TETH (No balance found)</span>
                   ) : (
                     `${balanceFormatted} TETH`
                   )}

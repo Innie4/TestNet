@@ -28,20 +28,29 @@ export const getCoinbaseProvider = () => {
 
   // If Coinbase Wallet extension is installed, use it directly
   if (ethereum?.isCoinbaseWallet) {
+    console.log('Using Coinbase Wallet extension');
     return ethereum;
   }
 
   // If multiple providers exist, find Coinbase Wallet
-  if (ethereum?.providers) {
+  if (ethereum?.providers && Array.isArray(ethereum.providers)) {
     const coinbaseProvider = ethereum.providers.find(
       (provider: any) => provider.isCoinbaseWallet
     );
     if (coinbaseProvider) {
+      console.log('Found Coinbase Wallet in providers array');
       return coinbaseProvider;
     }
   }
 
+  // Check if ethereum provider exists (might be Coinbase Wallet without isCoinbaseWallet flag)
+  if (ethereum && ethereum.request) {
+    console.log('Using ethereum provider (may be Coinbase Wallet)');
+    return ethereum;
+  }
+
   // Fallback: Initialize Coinbase Wallet SDK for mobile app
+  console.log('Initializing Coinbase Wallet SDK');
   const coinbaseWallet = new CoinbaseWalletSDK({
     appName: 'Tethereum Project',
     appLogoUrl: 'https://tethereum.com/logo.png',
