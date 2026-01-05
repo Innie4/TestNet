@@ -1,6 +1,13 @@
 import { ethers } from 'ethers';
 import { TETH_CONTRACT_ADDRESS, ERC20_MIN_ABI, BSC_NETWORK } from './constants';
 
+// Public BSC RPC endpoints as fallback
+const BSC_RPC_ENDPOINTS = [
+  'https://bsc-dataseed.binance.org/',
+  'https://bsc-dataseed1.defibit.io/',
+  'https://bsc-dataseed1.ninicoin.io/',
+];
+
 export interface TETHData {
   balance: string;
   balanceFormatted: string;
@@ -10,126 +17,101 @@ export interface TETHData {
 }
 
 /**
+ * Get TETH token balance using public RPC as fallback
+ */
+async function getBalanceFromPublicRPC(userAddress: string): Promise<{ balance: ethers.BigNumber; decimals: number }> {
+  for (const rpcUrl of BSC_RPC_ENDPOINTS) {
+    try {
+      const publicProvider = new ethers.providers.JsonRpcProvider(rpcUrl);
+      const contract = new ethers.Contract(TETH_CONTRACT_ADDRESS, ERC20_MIN_ABI, publicProvider);
+      
+      const normalizedAddress = ethers.utils.getAddress(userAddress);
+      const [balance, decimals] = await Promise.all([
+        contract.balanceOf(normalizedAddress),
+        contract.decimals()
+      ]);
+      
+      console.log(`Successfully fetched from public RPC (${rpcUrl}):`, balance.toString());
+      return { balance, decimals };
+    } catch (err) {
+      console.warn(`Failed to fetch from ${rpcUrl}:`, err);
+      continue;
+    }
+  }
+  throw new Error('All public RPC endpoints failed');
+}
+
+/**
  * Get TETH token balance for a given address
  */
 export async function getTETHBalance(
   provider: ethers.providers.Web3Provider,
   userAddress: string
 ): Promise<TETHData> {
+  // Normalize address first
+  let normalizedAddress: string;
+  try {
+    normalizedAddress = ethers.utils.getAddress(userAddress);
+  } catch (e) {
+    normalizedAddress = ethers.utils.getAddress(userAddress.toLowerCase());
+  }
+
+  console.log('=== getTETHBalance START ===');
+  console.log('User address:', userAddress);
+  console.log('Normalized address:', normalizedAddress);
+  console.log('Contract address:', TETH_CONTRACT_ADDRESS);
+
+  let balance: ethers.BigNumber;
+  let decimals: number = 18;
+  let symbol: string = 'TETH';
+  let name: string = 'Tethereum';
+
   try {
     // Ensure provider is ready
     await provider.ready;
     
-    // Verify we're on the correct network
+    // Verify network
     const network = await provider.getNetwork();
-    console.log('Network check - Chain ID:', network.chainId);
+    console.log('Network chain ID:', network.chainId);
+    
     if (network.chainId !== 56) {
-      throw new Error(`Wrong network. Expected BSC (56), got ${network.chainId}`);
-    }
-
-    // Normalize address - handle both checksum and lowercase
-    let normalizedAddress: string;
-    try {
-      // Try to get checksum address
-      normalizedAddress = ethers.utils.getAddress(userAddress);
-    } catch (e) {
-      // If checksum fails, use lowercase and try again
-      normalizedAddress = ethers.utils.getAddress(userAddress.toLowerCase());
-    }
-    console.log('Original address:', userAddress);
-    console.log('Normalized user address:', normalizedAddress);
-    console.log('Contract address:', TETH_CONTRACT_ADDRESS);
-
-    // Create contract instance
-    const contract = new ethers.Contract(
-      TETH_CONTRACT_ADDRESS,
-      ERC20_MIN_ABI,
-      provider
-    );
-
-    console.log('Contract instance created, fetching data...');
-    
-    // Fetch token data with individual error handling
-    let balance, decimals, symbol, name;
-    
-    try {
-      balance = await contract.balanceOf(normalizedAddress);
-      console.log('Balance fetched:', balance.toString());
-    } catch (err: any) {
-      console.error('Error fetching balance:', err);
-      throw new Error(`Failed to fetch balance: ${err.message}`);
-    }
-
-    try {
-      decimals = await contract.decimals();
-      console.log('Decimals:', decimals);
-    } catch (err: any) {
-      console.error('Error fetching decimals:', err);
-      // Default to 18 if decimals call fails
-      decimals = 18;
-      console.warn('Using default decimals: 18');
-    }
-
-    try {
-      symbol = await contract.symbol();
-      console.log('Symbol:', symbol);
-    } catch (err: any) {
-      console.error('Error fetching symbol:', err);
-      symbol = 'TETH';
-    }
-
-    try {
-      name = await contract.name();
-      console.log('Name:', name);
-    } catch (err: any) {
-      console.error('Error fetching name:', err);
-      name = 'Tethereum';
-    }
-
-    // Format balance - ensure we're using the correct decimals
-    const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
-    console.log('Balance BigNumber:', balance.toString());
-    console.log('Decimals used:', decimals);
-    console.log('Formatted balance string:', balanceFormatted);
-
-    // Verify balance is valid
-    if (!balance || balance.isZero()) {
-      console.warn('Balance is 0. Verifying with direct contract call...');
-      // Try one more time with a direct call using callStatic for reliability
-      try {
-        const recheckBalance = await contract.callStatic.balanceOf(normalizedAddress);
-        console.log('Recheck balance (callStatic):', recheckBalance.toString());
-        if (!recheckBalance.isZero() && !recheckBalance.eq(balance)) {
-          console.log('Balance changed on recheck, using new value');
-          balance = recheckBalance;
-          const recheckFormatted = ethers.utils.formatUnits(balance, decimals);
-          console.log('Recheck formatted:', recheckFormatted);
-        } else if (recheckBalance.isZero()) {
-          console.log('Confirmed: Balance is actually 0 for this address');
-        }
-      } catch (recheckErr: any) {
-        console.error('Recheck failed:', recheckErr);
-        // Try one more method - direct RPC call
-        try {
-          const data = contract.interface.encodeFunctionData('balanceOf', [normalizedAddress]);
-          const result = await provider.call({
-            to: TETH_CONTRACT_ADDRESS,
-            data: data
-          });
-          const decoded = contract.interface.decodeFunctionResult('balanceOf', result);
-          console.log('Direct RPC call balance:', decoded[0].toString());
-          if (!decoded[0].isZero()) {
-            balance = decoded[0];
-            const directFormatted = ethers.utils.formatUnits(balance, decimals);
-            console.log('Direct RPC formatted:', directFormatted);
-          }
-        } catch (directErr) {
-          console.error('Direct RPC call also failed:', directErr);
-        }
-      }
+      console.warn('Wrong network, trying public RPC...');
+      const publicData = await getBalanceFromPublicRPC(normalizedAddress);
+      balance = publicData.balance;
+      decimals = publicData.decimals;
     } else {
-      console.log('Balance is non-zero:', balance.toString());
+      // Create contract instance
+      const contract = new ethers.Contract(
+        TETH_CONTRACT_ADDRESS,
+        ERC20_MIN_ABI,
+        provider
+      );
+
+      // Fetch all data in parallel
+      try {
+        [balance, decimals, symbol, name] = await Promise.all([
+          contract.balanceOf(normalizedAddress),
+          contract.decimals().catch(() => 18),
+          contract.symbol().catch(() => 'TETH'),
+          contract.name().catch(() => 'Tethereum')
+        ]);
+        
+        console.log('Balance from wallet provider:', balance.toString());
+        console.log('Decimals:', decimals);
+        console.log('Symbol:', symbol);
+        console.log('Name:', name);
+      } catch (contractErr: any) {
+        console.warn('Contract call failed, trying public RPC:', contractErr);
+        const publicData = await getBalanceFromPublicRPC(normalizedAddress);
+        balance = publicData.balance;
+        decimals = publicData.decimals;
+      }
     }
+
+    // Format balance
+    const balanceFormatted = ethers.utils.formatUnits(balance, decimals);
+    console.log('Final balance (formatted):', balanceFormatted);
+    console.log('Balance is zero?', balance.isZero());
 
     return {
       balance: balance.toString(),
@@ -139,25 +121,28 @@ export async function getTETHBalance(
       decimals,
     };
   } catch (error: any) {
-    console.error('=== Error in getTETHBalance ===');
-    console.error('Error type:', error.constructor.name);
-    console.error('Error code:', error.code);
-    console.error('Error message:', error.message);
-    console.error('Error data:', error.data);
-    console.error('User address:', userAddress);
-    console.error('Contract address:', TETH_CONTRACT_ADDRESS);
+    console.error('=== CRITICAL ERROR in getTETHBalance ===');
+    console.error('Error:', error);
+    console.error('Message:', error.message);
+    console.error('Stack:', error.stack);
     
-    // Provide more detailed error information
-    if (error.code === 'NETWORK_ERROR' || error.message?.includes('network')) {
-      throw new Error('Network error. Please check your connection and ensure you are on BNB Smart Chain.');
+    // Last resort: try public RPC
+    try {
+      console.log('Attempting fallback to public RPC...');
+      const publicData = await getBalanceFromPublicRPC(normalizedAddress);
+      const balanceFormatted = ethers.utils.formatUnits(publicData.balance, publicData.decimals);
+      
+      return {
+        balance: publicData.balance.toString(),
+        balanceFormatted,
+        symbol,
+        name,
+        decimals: publicData.decimals,
+      };
+    } catch (fallbackErr) {
+      console.error('Fallback also failed:', fallbackErr);
+      throw error; // Throw original error
     }
-    if (error.code === 'CALL_EXCEPTION' || error.code === -32000) {
-      throw new Error(`Contract call failed: ${error.message || 'Please verify the contract address and network.'}`);
-    }
-    if (error.code === 'INVALID_ARGUMENT') {
-      throw new Error(`Invalid address format: ${userAddress}`);
-    }
-    throw new Error(error.message || 'Failed to fetch token balance');
   }
 }
 
