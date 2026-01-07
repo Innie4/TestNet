@@ -21,17 +21,17 @@ export default function Home() {
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isBSC, setIsBSC] = useState<boolean>(false);
   const [connectionStep, setConnectionStep] = useState<ConnectionStep>('authorization');
-  
+
   // Store event listener references for cleanup
   const eventListenersRef = useRef<{ ethereum: any; accountsChanged: ((accounts: unknown) => void) | null; chainChanged: ((chainId: string) => void) | null }>({
     ethereum: null,
     accountsChanged: null,
     chainChanged: null,
   });
-  
+
   // Track if component is mounted to prevent state updates after unmount
   const isMountedRef = useRef<boolean>(true);
-  
+
   // Track ongoing balance fetch to prevent race conditions
   const balanceFetchInProgressRef = useRef<boolean>(false);
 
@@ -83,7 +83,7 @@ export default function Home() {
   const checkConnection = async () => {
     try {
       if (typeof window === 'undefined' || !isMountedRef.current) return;
-      
+
       const ethereum = getCoinbaseProvider();
       if (!ethereum || !ethereum.request) {
         if (isMountedRef.current) {
@@ -96,14 +96,32 @@ export default function Home() {
       try {
         const accounts = await ethereum.request({ method: 'eth_accounts' }) as string[];
         console.log('Existing accounts check:', accounts);
-        
+
         if (isMountedRef.current) {
           if (accounts && accounts.length > 0) {
-            setAccount(accounts[0]);
+            const existingAccount = accounts[0];
+            setAccount(existingAccount);
             setIsConnected(true);
-            setConnectionStep('connected');
-            await checkNetwork();
+
+            // Check network and fetch balance for existing connection
+            const chainId = await getCurrentChainId(ethereum);
+            const isBSCNetwork = chainId === 56;
+            setIsBSC(isBSCNetwork);
+
+            if (isBSCNetwork) {
+              // If already on BSC, fetch balance immediately
+              setConnectionStep('fetching');
+              // Small delay to ensure provider is ready
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              await fetchBalance();
+              setConnectionStep('connected');
+            } else {
+              // Not on BSC, show connected but with error
+              setError('Please switch to BNB Smart Chain network');
+              setConnectionStep('connected');
+            }
           } else {
+            // No existing connection - show authorization prompt
             setConnectionStep('authorization');
           }
         }
@@ -127,7 +145,7 @@ export default function Home() {
       const ethereum = getCoinbaseProvider();
       const chainId = await getCurrentChainId(ethereum);
       const isBSCNetwork = chainId === 56; // BSC mainnet chain ID
-      
+
       if (isMountedRef.current) {
         setIsBSC(isBSCNetwork);
         if (!isBSCNetwork) {
@@ -138,7 +156,7 @@ export default function Home() {
       console.error('Error checking network:', err);
     }
   };
-  
+
   // Cleanup event listeners
   const cleanupEventListeners = () => {
     if (eventListenersRef.current.ethereum) {
@@ -177,25 +195,25 @@ export default function Home() {
       if (typeof window === 'undefined') {
         throw new Error('Window is not available');
       }
-      
+
       const ethereum = getCoinbaseProvider();
-      
+
       if (!ethereum || !ethereum.request) {
         throw new Error('Coinbase Smart Wallet not available. Please ensure Coinbase Wallet is installed.');
       }
 
       console.log('=== Initiating Coinbase Smart Wallet Connection ===');
       console.log('Provider type:', ethereum.constructor?.name);
-      
+
       // Perform the Coinbase Handshake (eth_requestAccounts)
       // This connects to Coinbase Smart Wallet (NOT browser extension)
       setConnectionStep('connecting');
-      
+
       console.log('Requesting accounts from Coinbase Smart Wallet...');
       const accounts = await ethereum.request({
         method: 'eth_requestAccounts',
       }) as string[];
-      
+
       console.log('Accounts received:', accounts);
 
       if (!accounts || accounts.length === 0) {
@@ -208,7 +226,7 @@ export default function Home() {
       // Check and switch to BSC network
       const chainId = await getCurrentChainId(ethereum);
       console.log('Current chain ID:', chainId);
-      
+
       if (chainId !== 56) {
         console.log('Not on BSC, attempting to switch...');
         setConnectionStep('switching');
@@ -237,10 +255,10 @@ export default function Home() {
 
       // Cleanup any existing event listeners first
       cleanupEventListeners();
-      
+
       // Store ethereum reference for cleanup
       eventListenersRef.current.ethereum = ethereum;
-      
+
       // Listen for account changes with error handling
       if (ethereum.on) {
         const accountsChangedHandler = (accounts: unknown) => {
@@ -265,7 +283,7 @@ export default function Home() {
             console.error('Error in accountsChanged handler:', err);
           }
         };
-        
+
         const chainChangedHandler = (chainId: string) => {
           try {
             if (!isMountedRef.current) return;
@@ -285,11 +303,11 @@ export default function Home() {
             console.error('Error in chainChanged handler:', err);
           }
         };
-        
+
         // Store handlers for cleanup
         eventListenersRef.current.accountsChanged = accountsChangedHandler;
         eventListenersRef.current.chainChanged = chainChangedHandler;
-        
+
         ethereum.on('accountsChanged', accountsChangedHandler);
         ethereum.on('chainChanged', chainChangedHandler);
       }
@@ -308,12 +326,12 @@ export default function Home() {
   const disconnectWallet = () => {
     // Cleanup event listeners
     cleanupEventListeners();
-    
+
     // Reset provider instance to allow fresh connection
     if (typeof window !== 'undefined') {
       resetProviderInstance();
     }
-    
+
     setAccount(null);
     setIsConnected(false);
     setBalance('0');
@@ -330,7 +348,7 @@ export default function Home() {
       console.log('Balance fetch already in progress, skipping...');
       return;
     }
-    
+
     if (!account) {
       console.log('No account set, skipping balance fetch');
       return;
@@ -340,7 +358,7 @@ export default function Home() {
       console.log('Not on BSC network, skipping balance fetch');
       return;
     }
-    
+
     if (!isMountedRef.current) {
       console.log('Component unmounted, skipping balance fetch');
       return;
@@ -355,29 +373,33 @@ export default function Home() {
       console.log('Account:', account);
       console.log('Network: BSC (56)');
       console.log('Contract: 0xc98cf0876b23fb1f574be5c59e4217c80b34d327');
-      
+
       const ethereum = getCoinbaseProvider();
-      
+
       if (!ethereum) {
         throw new Error('Wallet provider not available');
       }
 
       // Ensure provider is ready and test connection
       console.log('Testing provider connection...');
+      let actualAccount = account; // Use local variable to track the correct account
       if (ethereum.request) {
         const testAccounts = await ethereum.request({ method: 'eth_accounts' }) as string[];
         console.log('Provider accounts:', testAccounts);
         if (!testAccounts || testAccounts.length === 0) {
           throw new Error('No accounts available in provider');
         }
-        if (testAccounts[0].toLowerCase() !== account.toLowerCase()) {
-          console.warn('Account mismatch detected, updating account:', { 
-            expected: account, 
-            got: testAccounts[0] 
+        // CRITICAL FIX: Use the account from provider directly, not from state
+        // State updates are async, so we need to use the fresh value immediately
+        actualAccount = testAccounts[0];
+        if (actualAccount.toLowerCase() !== account?.toLowerCase()) {
+          console.warn('Account mismatch detected, updating account:', {
+            expected: account,
+            got: actualAccount
           });
-          // Update account to match provider
+          // Update account state for future renders
           if (isMountedRef.current) {
-            setAccount(testAccounts[0]);
+            setAccount(actualAccount);
           }
         }
       }
@@ -388,46 +410,48 @@ export default function Home() {
         name: 'bnb',
         chainId: 56,
       });
-      
+
       // Wait for network to be ready
       console.log('Waiting for provider to be ready...');
       await provider.ready;
-      
+
       // Verify network - but also check actual chain ID from provider
       const network = await provider.getNetwork();
       console.log('Provider network:', network);
-      
+
       // Also verify actual chain ID from the wallet
       const actualChainId = await ethereum.request({ method: 'eth_chainId' });
       const actualChainIdNum = parseInt(actualChainId, 16);
       console.log('Wallet chain ID:', actualChainIdNum);
-      
+
       if (network.chainId !== 56 || actualChainIdNum !== 56) {
         throw new Error(`Wrong network. Expected BSC (56), got provider: ${network.chainId}, wallet: ${actualChainIdNum}`);
       }
 
-      // Verify account is correct - use the account from state
-      // The account from eth_requestAccounts is the correct one
-      const addressToCheck = ethers.utils.getAddress(account);
+      // CRITICAL FIX: Use actualAccount (from provider) instead of account (from state)
+      // This ensures we use the correct, up-to-date address even if state hasn't updated yet
+      const addressToCheck = ethers.utils.getAddress(actualAccount);
       console.log('Using account for balance check:', addressToCheck);
-      
+      console.log('Account from state:', account);
+      console.log('Account from provider:', actualAccount);
+
       // Verify signer matches
       try {
         const signer = provider.getSigner();
         const signerAddress = await signer.getAddress();
         console.log('Signer address from provider:', signerAddress);
-        
-        if (signerAddress.toLowerCase() !== account.toLowerCase()) {
-          console.warn('Signer address differs, using account from connection:', {
-            account,
+
+        if (signerAddress.toLowerCase() !== actualAccount.toLowerCase()) {
+          console.warn('Signer address differs from provider account:', {
+            providerAccount: actualAccount,
             signer: signerAddress
           });
-          // Use the account from connection, not signer
+          // Use actualAccount from provider, not signer
         }
       } catch (signerErr) {
         console.warn('Could not get signer address, using account directly:', signerErr);
       }
-      
+
       // Fetch balance from connected wallet (Coinbase Smart Wallet)
       console.log('Fetching balance for address:', addressToCheck);
       const tethData = await getTETHBalance(provider, addressToCheck);
@@ -441,27 +465,27 @@ export default function Home() {
       // Import and format balance correctly
       const rawBalance = tethData.balanceFormatted;
       const balanceNum = parseFloat(rawBalance);
-      
+
       // Always use the actual balance from wallet
       if (isMountedRef.current) {
         setBalance(tethData.balance);
-      
-      // Format balance with proper decimal handling
-      let formatted: string;
-      if (balanceNum > 0 && balanceNum < 0.000001) {
-        // For very small balances, show up to 12 decimal places
-        formatted = balanceNum.toFixed(12).replace(/\.?0+$/, '');
-      } else if (balanceNum > 0 && balanceNum < 1) {
-        // For balances less than 1, show up to 8 decimal places
-        formatted = balanceNum.toFixed(8).replace(/\.?0+$/, '');
-      } else {
-        // For larger balances, use locale formatting with up to 6 decimals
-        formatted = balanceNum.toLocaleString('en-US', {
-          minimumFractionDigits: 0,
-          maximumFractionDigits: 6,
-        });
-      }
-      
+
+        // Format balance with proper decimal handling
+        let formatted: string;
+        if (balanceNum > 0 && balanceNum < 0.000001) {
+          // For very small balances, show up to 12 decimal places
+          formatted = balanceNum.toFixed(12).replace(/\.?0+$/, '');
+        } else if (balanceNum > 0 && balanceNum < 1) {
+          // For balances less than 1, show up to 8 decimal places
+          formatted = balanceNum.toFixed(8).replace(/\.?0+$/, '');
+        } else {
+          // For larger balances, use locale formatting with up to 6 decimals
+          formatted = balanceNum.toLocaleString('en-US', {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 6,
+          });
+        }
+
         setBalanceFormatted(formatted);
 
         console.log('=== Balance Update Complete ===');
@@ -477,17 +501,17 @@ export default function Home() {
       console.error('Error code:', err.code);
       console.error('Error message:', err.message);
       console.error('Error data:', err.data);
-      
+
       const errorMessage = err.message || 'Failed to fetch balance';
       setError(errorMessage);
-      
+
       // Retry logic (max 3 retries)
       if (retryCount < 3) {
         console.log(`Retrying balance fetch (attempt ${retryCount + 1}/3)...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
         return fetchBalance(retryCount + 1);
       }
-      
+
       // After all retries failed, show error
       console.error('All retries failed');
       if (isMountedRef.current) {
@@ -520,7 +544,7 @@ export default function Home() {
     try {
       const ethereum = getCoinbaseProvider();
       const switched = await switchToBSC(ethereum);
-      
+
       if (switched) {
         setIsBSC(true);
         await fetchBalance();
@@ -545,8 +569,8 @@ export default function Home() {
         </div>
       )}
 
-      {/* Authorization Step */}
-      {connectionStep === 'authorization' && !isConnected && (
+      {/* Authorization Step - Show when not connected or when explicitly in authorization step */}
+      {connectionStep === 'authorization' && (
         <WalletAuthorization
           onAuthorize={handleAuthorize}
           onCancel={handleCancel}
