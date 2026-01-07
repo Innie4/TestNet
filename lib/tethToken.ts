@@ -62,8 +62,17 @@ export async function getTETHBalance(
   console.log('Normalized address:', normalizedAddress);
   console.log('Contract address:', TETH_CONTRACT_ADDRESS);
 
-  // Ensure provider is ready
-  await provider.ready;
+  // Ensure provider is ready - wait with timeout
+  try {
+    await Promise.race([
+      provider.ready,
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Provider ready timeout')), 10000)
+      )
+    ]);
+  } catch (readyErr) {
+    console.warn('Provider ready check failed, continuing anyway:', readyErr);
+  }
   
   // Verify network (only check once to avoid redundant calls)
   const network = await provider.getNetwork();
@@ -79,10 +88,16 @@ export async function getTETHBalance(
   
   // Double-check by making a direct RPC call to verify network
   try {
-    const blockNumber = await provider.getBlockNumber();
+    const blockNumber = await Promise.race([
+      provider.getBlockNumber(),
+      new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Block number fetch timeout')), 5000)
+      )
+    ]);
     console.log('Current BSC block number:', blockNumber);
   } catch (blockErr) {
     console.warn('Could not fetch block number:', blockErr);
+    // Don't throw - this is just a verification step
   }
 
   // Create contract instance using the wallet provider
@@ -122,14 +137,26 @@ export async function getTETHBalance(
       console.log('Contract address:', contractAddressChecksum);
       
       // Try using callStatic first (more reliable for view functions)
+      // Use a longer timeout for balance calls
       const fetchedBalance = await Promise.race([
-        contract.callStatic.balanceOf(normalizedAddress).catch(() => {
+        contract.callStatic.balanceOf(normalizedAddress).catch((callStaticErr) => {
           // Fallback to regular call if callStatic fails
-          console.log('callStatic failed, trying regular call...');
-          return contract.balanceOf(normalizedAddress);
+          console.log('callStatic failed, trying regular call...', callStaticErr);
+          return contract.balanceOf(normalizedAddress).catch((regularErr: any) => {
+            console.log('Regular call also failed, trying direct RPC...', regularErr);
+            // Last resort: direct RPC call
+            const data = contract.interface.encodeFunctionData('balanceOf', [normalizedAddress]);
+            return provider.call({
+              to: contractAddressChecksum,
+              data: data
+            }).then((result) => {
+              const decoded = contract.interface.decodeFunctionResult('balanceOf', result);
+              return decoded[0];
+            });
+          });
         }),
         new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Balance fetch timeout')), 15000)
+          setTimeout(() => reject(new Error('Balance fetch timeout')), 20000)
         )
       ]);
       

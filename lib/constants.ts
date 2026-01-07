@@ -22,3 +22,4 @@ export const ERC20_MIN_ABI = [
   "function name() view returns (string)",
 ];
 
+

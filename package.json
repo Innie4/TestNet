@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node test-regression-comprehensive.js"
   },
   "dependencies": {
     "@coinbase/wallet-sdk": "^3.7.0",

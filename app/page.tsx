@@ -83,8 +83,17 @@ export default function Home() {
   const checkConnection = async () => {
     try {
       if (typeof window === 'undefined' || !isMountedRef.current) return;
-
-      const ethereum = getCoinbaseProvider();
+      
+      let ethereum;
+      try {
+        ethereum = getCoinbaseProvider();
+      } catch (sdkErr) {
+        console.log('SDK not available:', sdkErr);
+        if (isMountedRef.current) {
+          setConnectionStep('authorization');
+        }
+        return;
+      }
       if (!ethereum || !ethereum.request) {
         if (isMountedRef.current) {
           setConnectionStep('authorization');
@@ -102,6 +111,7 @@ export default function Home() {
             const existingAccount = accounts[0];
             setAccount(existingAccount);
             setIsConnected(true);
+<<<<<<< HEAD
 
             // Check network and fetch balance for existing connection
             const chainId = await getCurrentChainId(ethereum);
@@ -113,8 +123,10 @@ export default function Home() {
               setConnectionStep('fetching');
               // Small delay to ensure provider is ready
               await new Promise(resolve => setTimeout(resolve, 1000));
-              await fetchBalance();
-              setConnectionStep('connected');
+              if (isMountedRef.current) {
+                await fetchBalance();
+                setConnectionStep('connected');
+              }
             } else {
               // Not on BSC, show connected but with error
               setError('Please switch to BNB Smart Chain network');
@@ -126,7 +138,7 @@ export default function Home() {
           }
         }
       } catch (err) {
-        console.log('No existing connection found');
+        console.log('No existing connection found:', err);
         if (isMountedRef.current) {
           setConnectionStep('authorization');
         }
@@ -220,8 +232,11 @@ export default function Home() {
         throw new Error('No accounts found. Please approve the connection.');
       }
 
-      setAccount(accounts[0]);
-      setIsConnected(true);
+      // Set account and connection state with mount check
+      if (isMountedRef.current) {
+        setAccount(accounts[0]);
+        setIsConnected(true);
+      }
 
       // Check and switch to BSC network
       const chainId = await getCurrentChainId(ethereum);
@@ -229,28 +244,50 @@ export default function Home() {
 
       if (chainId !== 56) {
         console.log('Not on BSC, attempting to switch...');
-        setConnectionStep('switching');
+        if (isMountedRef.current) {
+          setConnectionStep('switching');
+        }
         const switched = await switchToBSC(ethereum);
         if (switched) {
           console.log('Successfully switched to BSC');
-          setIsBSC(true);
-          // Wait a bit for network switch to complete
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          setConnectionStep('fetching');
-          await fetchBalance();
-          setConnectionStep('connected');
+          // Verify chain ID after switch
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const newChainId = await getCurrentChainId(ethereum);
+          console.log('Chain ID after switch:', newChainId);
+          
+          if (newChainId === 56 && isMountedRef.current) {
+            setIsBSC(true);
+            setConnectionStep('fetching');
+            // Wait for provider to stabilize
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            await fetchBalance();
+            if (isMountedRef.current) {
+              setConnectionStep('connected');
+            }
+          } else {
+            if (isMountedRef.current) {
+              setError('Failed to switch to BNB Smart Chain. Please switch manually.');
+              setConnectionStep('connected');
+            }
+          }
         } else {
-          setError('Failed to switch to BNB Smart Chain. Please switch manually.');
-          setConnectionStep('connected');
+          if (isMountedRef.current) {
+            setError('Failed to switch to BNB Smart Chain. Please switch manually.');
+            setConnectionStep('connected');
+          }
         }
       } else {
         console.log('Already on BSC network');
-        setIsBSC(true);
-        setConnectionStep('fetching');
+        if (isMountedRef.current) {
+          setIsBSC(true);
+          setConnectionStep('fetching');
+        }
         // Longer delay to ensure provider is fully ready
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => setTimeout(resolve, 2000));
         await fetchBalance();
-        setConnectionStep('connected');
+        if (isMountedRef.current) {
+          setConnectionStep('connected');
+        }
       }
 
       // Cleanup any existing event listeners first
@@ -353,20 +390,43 @@ export default function Home() {
       console.log('No account set, skipping balance fetch');
       return;
     }
-
-    if (!isBSC) {
-      console.log('Not on BSC network, skipping balance fetch');
-      return;
-    }
-
+    
     if (!isMountedRef.current) {
       console.log('Component unmounted, skipping balance fetch');
       return;
     }
 
+    // Verify network before proceeding
+    try {
+      const ethereum = getCoinbaseProvider();
+      if (ethereum && ethereum.request) {
+        const currentChainId = await getCurrentChainId(ethereum);
+        if (currentChainId !== 56) {
+          console.log('Not on BSC network, skipping balance fetch. Chain ID:', currentChainId);
+          if (isMountedRef.current) {
+            setIsBSC(false);
+            setError('Please switch to BNB Smart Chain network');
+          }
+          return;
+        }
+        // Update isBSC state if we're on the correct network
+        if (isMountedRef.current && !isBSC) {
+          setIsBSC(true);
+        }
+      }
+    } catch (networkErr) {
+      console.error('Error verifying network:', networkErr);
+      if (isMountedRef.current) {
+        setError('Error verifying network. Please try again.');
+      }
+      return;
+    }
+
     balanceFetchInProgressRef.current = true;
-    setLoading(true);
-    setError(null);
+    if (isMountedRef.current) {
+      setLoading(true);
+      setError(null);
+    }
 
     try {
       console.log('=== Starting Balance Fetch ===');
@@ -404,6 +464,15 @@ export default function Home() {
         }
       }
 
+      // Verify network BEFORE creating provider
+      const actualChainId = await ethereum.request({ method: 'eth_chainId' });
+      const actualChainIdNum = parseInt(actualChainId, 16);
+      console.log('Wallet chain ID before provider creation:', actualChainIdNum);
+      
+      if (actualChainIdNum !== 56) {
+        throw new Error(`Wrong network. Expected BSC (56), got ${actualChainIdNum}. Please switch to BNB Smart Chain.`);
+      }
+
       // Create ethers provider with explicit network configuration
       // CRITICAL: Force BSC network to ensure contract calls use correct RPC
       const provider = new ethers.providers.Web3Provider(ethereum as any, {
@@ -414,18 +483,22 @@ export default function Home() {
       // Wait for network to be ready
       console.log('Waiting for provider to be ready...');
       await provider.ready;
-
-      // Verify network - but also check actual chain ID from provider
+      
+      // Verify network from provider
       const network = await provider.getNetwork();
       console.log('Provider network:', network);
-
-      // Also verify actual chain ID from the wallet
-      const actualChainId = await ethereum.request({ method: 'eth_chainId' });
-      const actualChainIdNum = parseInt(actualChainId, 16);
-      console.log('Wallet chain ID:', actualChainIdNum);
-
-      if (network.chainId !== 56 || actualChainIdNum !== 56) {
-        throw new Error(`Wrong network. Expected BSC (56), got provider: ${network.chainId}, wallet: ${actualChainIdNum}`);
+      
+      if (network.chainId !== 56) {
+        throw new Error(`Provider network mismatch. Expected BSC (56), got ${network.chainId}`);
+      }
+      
+      // Double-check wallet chain ID
+      const verifyChainId = await ethereum.request({ method: 'eth_chainId' });
+      const verifyChainIdNum = parseInt(verifyChainId, 16);
+      console.log('Wallet chain ID verification:', verifyChainIdNum);
+      
+      if (verifyChainIdNum !== 56) {
+        throw new Error(`Wallet network changed. Expected BSC (56), got ${verifyChainIdNum}`);
       }
 
       // CRITICAL FIX: Use actualAccount (from provider) instead of account (from state)
@@ -506,9 +579,11 @@ export default function Home() {
       setError(errorMessage);
 
       // Retry logic (max 3 retries)
-      if (retryCount < 3) {
+      if (retryCount < 3 && isMountedRef.current) {
         console.log(`Retrying balance fetch (attempt ${retryCount + 1}/3)...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
+        // Reset the ref to allow retry
+        balanceFetchInProgressRef.current = false;
         return fetchBalance(retryCount + 1);
       }
 
@@ -517,6 +592,7 @@ export default function Home() {
       if (isMountedRef.current) {
         setBalance('0');
         setBalanceFormatted('0');
+        setError(err.message || 'Failed to fetch balance after multiple attempts');
       }
     } finally {
       balanceFetchInProgressRef.current = false;
