@@ -111,7 +111,6 @@ export default function Home() {
             const existingAccount = accounts[0];
             setAccount(existingAccount);
             setIsConnected(true);
-<<<<<<< HEAD
 
             // Check network and fetch balance for existing connection
             const chainId = await getCurrentChainId(ethereum);
